@@ -1,5 +1,20 @@
 ;;; some lisp to simplify handling directories on heirarchical filesystems (eg POSIX systems)
 
+(defpackage #:cl-fad-ext
+  (:use #:cl #:cl-fad)
+  (:export #:absolute-pathname-p
+	   #:relative-pathname-p
+	   #:normalize-path
+	   #:subdirectory
+	   #:subdirectory-p
+	   #:parent-directory
+	   #:parent-directory-p
+	   ;;for interactive filesystem usage
+	   #:cd
+	   #:updir))
+	   
+(in-package #:cl-fad-ext)
+
 (defun absolute-pathname-p (path)
   "Returns true if path is an absolute path"
   (when (eql (first (pathname-directory path)) :absolute)
