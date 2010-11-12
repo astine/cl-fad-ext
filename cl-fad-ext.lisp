@@ -8,10 +8,7 @@
 	   #:subdirectory
 	   #:subdirectory-p
 	   #:parent-directory
-	   #:parent-directory-p
-	   ;;for interactive filesystem usage
-	   #:cd
-	   #:updir))
+	   #:parent-directory-p))
 	   
 (in-package #:cl-fad-ext)
 
@@ -28,25 +25,27 @@
 (defun normalize-directory (directory)
   "Removes .. and . from the directory path."
   ;;TODO fix it so it works with symbolic links
-  (cond ((or (equal (first directory) :relative)
-	     (equal (first directory) :absolute))
-	 (cons (first directory) (normalize-directory (rest directory))))
-	((null directory) nil)
-	((equal (first directory) ".")
-	 (normalize-directory (rest directory)))
-	((and (member (second directory) '(:back :up "..") :test #'equal)
-	      (not (member (second directory) '(:back :up "..") :test #'equal)))
-	 (normalize-directory (nthcdr 2 directory)))
-	(t (cons (first directory)
-		 (normalize-directory (rest directory))))))
+  (labels ((filter-directory (directory)
+	     (cond ((null directory) nil)
+		   ((equal (first directory) ".")
+		    (filter-directory (rest directory)))
+		   ((member (first directory) '(:back :up "..") :test #'equal)
+		    (rest (filter-directory (rest directory))))
+		   (t (cons (first directory) 
+			    (filter-directory (rest directory)))))))
+    (cons (first directory) 
+	  (nreverse (filter-directory
+		     (reverse (rest directory)))))))
+  
 
 (defun normalize-path (path)
-  "Removes .. and . from the directory path."
+  "Returns a pathname equivalent to 'path' but without '..' or '.'
+   For example: /foo/./bar/../baz/ becomes /foo/baz/"
   (make-pathname :defaults path
 		 :directory (normalize-directory (pathname-directory path))))
 
 (defun subdirectory (path1 path2)
-  "Concatenates path1 and path2, returning a path which is a subdirectectory of path1"
+  "Concatenates path1 and path2, returning a path which is a subdirectory of path1"
   (when (eql (first (pathname-directory path2)) :absolute)
     (warn "~A is an absolute pathname" path2))
   (unless (directory-pathname-p path1)
@@ -75,24 +74,101 @@
 
 (defun parent-directory (path &optional (number 1))
   "Returns the parent directory of path."
-  (make-pathname :defaults path
-		 :directory (butlast (pathname-directory path) number)))
+  (let ((path-dir (pathname-directory path)))
+    (make-pathname :defaults path
+		   :directory (if (> (list-length path-dir) number)
+				  (butlast path-dir number)
+				  (progn 
+				    (warn "~A already at Root: there is no parent directory" path)
+				    path-dir)))))
 
 (defun parent-directory-p (path1 path2)
   "Returns true if path2 is a parent directory of path1"
   (subdirectory-p path2 path1))
 
-;;; --- for manipulating the filesystem
+;;; --- for manipulating the current directory
 
-(defun cd (newpath)
-  "Changes the current working directory."
-  (let ((path (pathname-as-directory (pathname newpath))))
-    (setf *default-pathname-defaults*
-	  (if (absolute-pathname-p path)
-	      path
-	      (subdirectory *default-pathname-defaults*
-			    path)))))
+(defpackage #:change-directory
+  (:use #:cl #:cl-fad #:cl-fad-ext)
+  (:export #:cwd
+	   #:cd))
+	   
+(in-package #:change-directory)
+
+(defvar *cwd* *default-pathname-defaults*
+  "Holds the current working directory.")
+
+(defvar *sync-default-pathname-defaults* t
+  "Specifies whether *default-pathname-defaults* will be synced to the current working directory.
+   Default is true.")
+
+(defvar *directory-history* nil
+  "Contains a list of working directories previously visited.")
+
+(defvar *directory-future* nil
+  "Contains a list working directories visited and left while going back in the history.")
+
+(defun cwd ()
+  "Returns the current working directory."
+  *cwd*)
+
+(defun set-cwd (newpath)
+  "Primary setter for the current working directory.
+   Keeps it normalized and syncs *default-pathname-defaults* to the
+   current working directory when said behavior is enabled."
+  (setf *cwd* (normalize-path (pathname-as-directory (pathname newpath))))
+  (when *sync-default-pathname-defaults*
+    (setf *default-pathname-defaults* *cwd*))
+  *cwd*)
+    
+(defsetf cwd () (newpath)
+  `(set-cwd ,newpath))
 
 (defun updir (&optional (number 1))
   "Changes to the parent of the current working directory."
-  (cd (parent-directory *default-pathname-defaults* number)))
+  (push (cwd) *directory-history*)
+  (setf (cwd) (parent-directory (cwd) number))))
+
+(defun dir-history (&optional (number 1))
+  "Moves forward and backward through the directory history."
+  (cond ((> number 0)
+	 (dotimes (n number)
+	   (let ((dir (pop *directory-history*)))
+	     (push (cwd) *directory-future*)
+	     (setf (cwd) dir))))
+	((< number 0)
+	 (dotimes (n (- number))
+	   (let ((dir (pop *directory-future*)))
+	     (push (cwd) *directory-history*)
+	     (setf (cwd) dir)))))
+  (cwd))
+
+(defun cd (&rest newpath)
+  "Manipulates the current working directory by applying the instructions
+   in newpath sequentially. Pathnames and pathstrings change the cwd to 
+   the paths specified. Relative pathnames and pathstrings are interpreted
+   relative to the current cwd. Keyword :up, moves up the directory tree and
+   keywords :back and :forward move back and forth through the movement
+   history respectively. All keyword arguments and be followed with a number
+   to specify the number of times it should be applied."
+  (let ((path (pop newpath)))
+    (typecase path 
+      (list (apply #'cd path))
+      ((or string pathname)
+       (push (cwd) *directory-history*)
+       (setf (cwd)
+	     (if (absolute-pathname-p (pathname path))
+		 path
+		 (subdirectory (cwd) path))))
+      (keyword (let ((modifier (if (numberp (first newpath))
+				   (pop newpath)
+				   1)))
+		 (case path
+		   (:back (dir-history modifier))
+		   (:up (updir modifier))
+		   (:forward (dir-history (- modifier)))))))
+    (if newpath
+	(cd newpath)
+	(cwd))))
+
+
