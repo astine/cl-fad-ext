@@ -79,8 +79,8 @@
 		   :directory (if (> (list-length path-dir) number)
 				  (butlast path-dir number)
 				  (progn 
-				    (warn "~A already at Root: there is no parent directory" path)
-				    path-dir)))))
+				    (warn "Cannot go any further up the directory hierarchy.")
+				    (list (first path-dir)))))))
 
 (defun parent-directory-p (path1 path2)
   "Returns true if path2 is a parent directory of path1"
